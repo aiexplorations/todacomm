@@ -1,0 +1,55 @@
+# Architecture Perturbation Study for Language Models
+# Systematic analysis across transformer architectures
+
+experiment_name: "architecture_perturbation_lm"
+experiment_type: "architecture_perturbation"
+description: "Systematic validation across transformer architectures and sizes"
+
+# Model Variants to Test
+model_variants:
+  - {type: "gpt2", name: "gpt2", task: "lm", desc: "GPT-2 Small (117M)"}
+  - {type: "gpt2", name: "distilgpt2", task: "lm", desc: "DistilGPT-2 (82M)"}
+  - {type: "bert", name: "bert-base-uncased", task: "classification", desc: "BERT Base (110M)"}
+  - {type: "bert", name: "distilbert-base-uncased", task: "classification", desc: "DistilBERT (66M)"}
+
+# Dataset Configuration
+dataset:
+  name: "wikitext2"
+  task: "lm"
+  tokenizer: "gpt2"  # Will be overridden per model
+  max_length: 256
+  num_samples: 1000  # Small for M4 Pro
+  batch_size: 8
+
+# Layers to Analyze (will be adapted per model)
+analysis_layers: ["embedding", "layer_3", "layer_6", "layer_9", "final"]
+
+# TDA Configuration
+tda:
+  maxdim: 1
+  metric: "euclidean"
+  pca_components: 100  # Balance between info and speed
+  sampling_strategy: "uniform"
+  max_points: 2000
+
+# Extraction Configuration
+extraction:
+  max_samples: 1000
+  pool_strategy: "mean"
+  device: "cpu"  # Or "mps" for M4 Pro
+
+# Fine-tuning Configuration (optional, for perturbation)
+fine_tuning:
+  enabled: false  # Set to true for training perturbation
+  epochs: 1
+  learning_rate: 5e-5
+
+# Output Configuration
+output:
+  generate_report: true
+  generate_pdf: false
+  save_artifacts: true
+
+# Execution
+device: "cpu"  # Change to "mps" for M4 Pro GPU
+random_seed: 42

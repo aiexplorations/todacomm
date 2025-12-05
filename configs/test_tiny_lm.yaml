@@ -1,0 +1,46 @@
+# Quick test configuration for pipeline validation
+# Uses tiny model and minimal data for fast iteration
+
+experiment_name: "test_tiny_lm"
+experiment_type: "quick_test"
+description: "Fast validation test with minimal resources"
+
+# Model Configuration - Tiny for speed
+model:
+  type: "gpt2"
+  name: "gpt2"  # Smallest GPT-2 (117M params)
+  task: "lm"
+
+# Dataset Configuration - Small subset
+dataset:
+  name: "wikitext2"
+  task: "lm"
+  tokenizer: "gpt2"
+  max_length: 128  # Short sequences
+  num_samples: 100  # Very small for quick test
+  batch_size: 4
+
+# Layers to analyze
+analysis_layers: ["embedding", "layer_3", "layer_6", "final"]
+
+# TDA Configuration
+tda:
+  maxdim: 1
+  metric: "euclidean"
+  pca_components: 50  # Reduced for speed
+  sampling_strategy: "uniform"
+  max_points: 500  # Small for quick computation
+
+# Extraction Configuration
+extraction:
+  max_samples: 100
+  pool_strategy: "mean"
+  device: "cpu"
+
+# Output Configuration
+output:
+  generate_report: true
+  save_artifacts: true
+
+# Execution
+device: "cpu"  # Use CPU for quick test
