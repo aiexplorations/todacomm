@@ -1,9 +1,9 @@
-# Architecture Perturbation Study for Language Models
-# Systematic analysis across transformer architectures
+# Multi-Model TDA Comparison for Language Models
+# Compare topological features across transformer architectures
 
-experiment_name: "architecture_perturbation_lm"
-experiment_type: "architecture_perturbation"
-description: "Systematic validation across transformer architectures and sizes"
+experiment_name: "multi_model_comparison_lm"
+experiment_type: "multi_model_comparison"
+description: "Compare topological features of activation spaces across transformer architectures"
 
 # Model Variants to Test
 model_variants:
@@ -38,9 +38,9 @@ extraction:
   pool_strategy: "mean"
   device: "cpu"  # Or "mps" for M4 Pro
 
-# Fine-tuning Configuration (optional, for perturbation)
+# Fine-tuning Configuration (optional)
 fine_tuning:
-  enabled: false  # Set to true for training perturbation
+  enabled: false
   epochs: 1
   learning_rate: 5e-5
 

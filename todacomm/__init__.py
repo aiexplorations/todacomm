@@ -1,8 +1,8 @@
 """
-TDA Perturbation Analysis for Small Language Models
+ToDACoMM - Topological Data Analysis Comparison of Multiple Models
 
-A comprehensive pipeline for analyzing topological properties of transformer-based
-language models using persistent homology and systematic perturbation studies.
+A pipeline for comparing topological properties of activation spaces across
+different pre-trained transformer models using persistent homology.
 """
 
 __version__ = "0.1.0"
@@ -15,6 +15,7 @@ from . import data
 from . import extract
 from . import analysis
 from . import utils
+from . import visualization
 
 __all__ = [
     "models",
@@ -23,4 +24,5 @@ __all__ = [
     "extract",
     "analysis",
     "utils",
+    "visualization",
 ]

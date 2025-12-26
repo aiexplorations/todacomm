@@ -1,0 +1,58 @@
+experiment_name: gemma2-2b_tda
+experiment_type: quick_test
+description: Quick TDA analysis of Gemma-2-2B (Google, 2.6B params, 2024)
+model:
+  type: gemma
+  name: google/gemma-2-2b
+  task: lm
+dataset:
+  name: wikitext2
+  task: lm
+  tokenizer: google/gemma-2-2b
+  max_length: 128
+  num_samples: 200
+  batch_size: 8
+analysis_layers:
+- embedding
+- layer_0
+- layer_1
+- layer_2
+- layer_3
+- layer_4
+- layer_5
+- layer_6
+- layer_7
+- layer_8
+- layer_9
+- layer_10
+- layer_11
+- layer_12
+- layer_13
+- layer_14
+- layer_15
+- layer_16
+- layer_17
+- layer_18
+- layer_19
+- layer_20
+- layer_21
+- layer_22
+- layer_23
+- layer_24
+- layer_25
+- final
+tda:
+  maxdim: 1
+  metric: euclidean
+  pca_components: 50
+  sampling_strategy: uniform
+  max_points: 500
+extraction:
+  max_samples: 200
+  pool_strategy: mean
+  device: cpu
+output:
+  generate_report: true
+  save_artifacts: true
+device: cpu
+random_seed: 42
