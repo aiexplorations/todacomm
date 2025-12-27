@@ -298,15 +298,16 @@ open htmlcov/index.html
 
 | Module | Coverage |
 |--------|----------|
+| `cli.py` | 97% |
 | `tda/persistence.py` | 97% |
 | `visualization/tda_plots.py` | 99% |
 | `analysis/interpretation.py` | 99% |
 | `analysis/meta_analysis.py` | 95% |
 | `analysis/dataset_comparison.py` | 85% |
 | `analysis/correlation.py` | 85% |
-| **Overall** | **73%** |
+| **Overall** | **82%** |
 
-Note: Lower coverage in `cli.py`, `models/transformer.py`, and `extract/` modules is expected—these require model downloads which are skipped in fast tests.
+Note: Lower coverage in `models/transformer.py` and `extract/` modules is expected—these require model downloads which are skipped in fast tests.
 
 ---
 

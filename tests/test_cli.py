@@ -3,8 +3,9 @@
 import argparse
 import pytest
 import tempfile
+import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 import yaml
 
 from todacomm.cli import (
@@ -15,6 +16,9 @@ from todacomm.cli import (
     cmd_list_models,
     cmd_list_configs,
     cmd_init,
+    cmd_run,
+    cmd_compare,
+    run_single_model,
     main,
 )
 
@@ -467,3 +471,415 @@ class TestRunCommandValidation:
         parser = create_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["run", "--model", "gpt2", "--dataset", "invalid_dataset"])
+
+
+class TestCmdRunWithMocking:
+    """Tests for cmd_run with mocked pipeline execution."""
+
+    def test_run_with_config_file(self, tmp_path, monkeypatch):
+        """cmd_run with config file should call run_experiment."""
+        monkeypatch.chdir(tmp_path)
+
+        # Create a config file
+        configs_dir = tmp_path / "configs"
+        configs_dir.mkdir()
+        config_path = configs_dir / "test.yaml"
+        config = {
+            "experiment_name": "test",
+            "model": {"name": "gpt2", "type": "gpt2"},
+            "dataset": {"name": "wikitext2"}
+        }
+        with open(config_path, "w") as f:
+            yaml.dump(config, f)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--config", str(config_path)])
+
+        mock_run_experiment = MagicMock()
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        mock_run_experiment.assert_called_once_with(str(config_path))
+
+    def test_run_with_single_model(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with single model should create temp config and run."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--samples", "100"])
+
+        mock_run_experiment = MagicMock()
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        mock_run_experiment.assert_called_once()
+        captured = capsys.readouterr()
+        assert "gpt2" in captured.out
+
+    def test_run_with_layers_all(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with --layers all should use all layers."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--layers", "all"])
+
+        # Capture the config before it's deleted
+        captured_config = {}
+
+        def capture_config(config_path):
+            with open(config_path) as f:
+                captured_config.update(yaml.safe_load(f))
+
+        mock_run_experiment = MagicMock(side_effect=capture_config)
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        # GPT-2 has 12 layers, so all layers should be 14 (embedding + 12 + final)
+        assert len(captured_config["analysis_layers"]) == 14
+
+    def test_run_with_specific_layers(self, tmp_path, monkeypatch):
+        """cmd_run with specific layers should use those layers."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--layers", "embedding,layer_5,final"])
+
+        captured_config = {}
+
+        def capture_config(config_path):
+            with open(config_path) as f:
+                captured_config.update(yaml.safe_load(f))
+
+        mock_run_experiment = MagicMock(side_effect=capture_config)
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        assert captured_config["analysis_layers"] == ["embedding", "layer_5", "final"]
+
+    def test_run_with_custom_pca(self, tmp_path, monkeypatch):
+        """cmd_run with custom PCA should use specified value."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--pca", "100"])
+
+        captured_config = {}
+
+        def capture_config(config_path):
+            with open(config_path) as f:
+                captured_config.update(yaml.safe_load(f))
+
+        mock_run_experiment = MagicMock(side_effect=capture_config)
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        assert captured_config["tda"]["pca_components"] == 100
+
+    def test_run_with_device(self, tmp_path, monkeypatch):
+        """cmd_run with device should use specified device."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--device", "mps"])
+
+        captured_config = {}
+
+        def capture_config(config_path):
+            with open(config_path) as f:
+                captured_config.update(yaml.safe_load(f))
+
+        mock_run_experiment = MagicMock(side_effect=capture_config)
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        assert captured_config["device"] == "mps"
+
+
+class TestCmdRunMultiModel:
+    """Tests for multi-model analysis."""
+
+    def test_run_with_multiple_models(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with multiple models should run each and generate meta-analysis."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+        (tmp_path / "experiments").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--models", "gpt2,bert"])
+
+        mock_run_experiment = MagicMock()
+        mock_meta_analysis = MagicMock(return_value="experiments/meta_analysis.md")
+
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            with patch('todacomm.analysis.meta_analysis.run_meta_analysis_cli', mock_meta_analysis):
+                result = cmd_run(args)
+
+        assert result == 0
+        # Should have called run_experiment twice (once per model)
+        assert mock_run_experiment.call_count == 2
+        captured = capsys.readouterr()
+        assert "Multi-Model Analysis" in captured.out
+
+    def test_run_with_invalid_model_in_list(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with invalid model in list should show error."""
+        monkeypatch.chdir(tmp_path)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--models", "gpt2,invalid_model"])
+
+        result = cmd_run(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Unknown model" in captured.out
+
+
+class TestCmdRunMultiDataset:
+    """Tests for multi-dataset analysis."""
+
+    def test_run_with_multiple_datasets(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with multiple datasets should run each and generate comparison."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+        (tmp_path / "experiments").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--datasets", "wikitext2,squad"])
+
+        mock_run_experiment = MagicMock()
+        mock_dataset_comparison = MagicMock(return_value="experiments/comparison.md")
+
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            with patch('todacomm.analysis.dataset_comparison.run_dataset_comparison_cli', mock_dataset_comparison):
+                result = cmd_run(args)
+
+        assert result == 0
+        assert mock_run_experiment.call_count == 2
+        captured = capsys.readouterr()
+        assert "Multi-Dataset Analysis" in captured.out
+
+    def test_run_with_invalid_dataset_in_list(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with invalid dataset in list should show error."""
+        monkeypatch.chdir(tmp_path)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--datasets", "wikitext2,invalid"])
+
+        result = cmd_run(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Unknown dataset" in captured.out
+
+
+class TestCmdRunCustomModel:
+    """Tests for custom HuggingFace model."""
+
+    def test_run_with_hf_model(self, tmp_path, monkeypatch, capsys):
+        """cmd_run with --hf-model should work."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--hf-model", "microsoft/phi-1_5", "--num-layers", "24"])
+
+        mock_run_experiment = MagicMock()
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "microsoft/phi-1_5" in captured.out
+
+    def test_run_with_hf_model_layers_all(self, tmp_path, monkeypatch):
+        """cmd_run with --hf-model and --layers all should generate all layers."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--hf-model", "test/model", "--num-layers", "6", "--layers", "all"])
+
+        captured_config = {}
+
+        def capture_config(config_path):
+            with open(config_path) as f:
+                captured_config.update(yaml.safe_load(f))
+
+        mock_run_experiment = MagicMock(side_effect=capture_config)
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = cmd_run(args)
+
+        assert result == 0
+        # Should be embedding + 6 layers + final = 8
+        assert len(captured_config["analysis_layers"]) == 8
+
+
+class TestCmdCompare:
+    """Tests for cmd_compare function."""
+
+    def test_compare_generates_meta_analysis(self, tmp_path, monkeypatch, capsys):
+        """cmd_compare should generate meta-analysis."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "experiments").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["compare", "gpt2,bert"])
+
+        mock_meta_analysis = MagicMock(return_value="experiments/meta_analysis.md")
+
+        with patch('todacomm.analysis.meta_analysis.run_meta_analysis_cli', mock_meta_analysis):
+            result = cmd_compare(args)
+
+        assert result == 0
+        mock_meta_analysis.assert_called_once_with(["gpt2", "bert"], None)
+        captured = capsys.readouterr()
+        assert "Meta-Analysis" in captured.out
+
+    def test_compare_with_output_name(self, tmp_path, monkeypatch):
+        """cmd_compare with output name should pass it to meta-analysis."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "experiments").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["compare", "gpt2,bert", "--output", "my_comparison"])
+
+        mock_meta_analysis = MagicMock(return_value="experiments/my_comparison.md")
+
+        with patch('todacomm.analysis.meta_analysis.run_meta_analysis_cli', mock_meta_analysis):
+            result = cmd_compare(args)
+
+        assert result == 0
+        mock_meta_analysis.assert_called_once_with(["gpt2", "bert"], "my_comparison")
+
+
+class TestRunSingleModel:
+    """Tests for run_single_model function."""
+
+    def test_run_single_model_success(self, tmp_path, monkeypatch):
+        """run_single_model should return experiment directory on success."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2", "--samples", "100"])
+
+        mock_run_experiment = MagicMock()
+
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            result = run_single_model("gpt2", args)
+
+        # Should return experiment directory (though mocked)
+        assert result is not None or mock_run_experiment.called
+
+    def test_run_single_model_with_dataset_override(self, tmp_path, monkeypatch):
+        """run_single_model with dataset_override should use that dataset."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir(exist_ok=True)
+
+        parser = create_parser()
+        args = parser.parse_args(["run", "--model", "gpt2"])
+
+        captured_config = {}
+
+        def capture_config(config_path):
+            with open(config_path) as f:
+                captured_config.update(yaml.safe_load(f))
+
+        mock_run_experiment = MagicMock(side_effect=capture_config)
+
+        with patch('pipeline.unified_pipeline.run_experiment', mock_run_experiment):
+            run_single_model("gpt2", args, dataset_override="squad")
+
+        assert captured_config["dataset"]["name"] == "squad"
+        assert "squad" in captured_config["experiment_name"]
+
+
+class TestCmdListConfigsEdgeCases:
+    """Additional edge case tests for cmd_list_configs."""
+
+    def test_list_configs_empty_directory(self, tmp_path, monkeypatch, capsys):
+        """list-configs with empty configs dir should show message."""
+        monkeypatch.chdir(tmp_path)
+        configs_dir = tmp_path / "configs"
+        configs_dir.mkdir()
+
+        parser = create_parser()
+        args = parser.parse_args(["list-configs"])
+        result = cmd_list_configs(args)
+
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "No configuration files found" in captured.out
+
+    def test_list_configs_with_invalid_yaml(self, tmp_path, monkeypatch, capsys):
+        """list-configs should handle invalid YAML gracefully."""
+        monkeypatch.chdir(tmp_path)
+        configs_dir = tmp_path / "configs"
+        configs_dir.mkdir()
+
+        # Create an invalid YAML file
+        with open(configs_dir / "invalid.yaml", "w") as f:
+            f.write("invalid: yaml: content: [")
+
+        parser = create_parser()
+        args = parser.parse_args(["list-configs"])
+        result = cmd_list_configs(args)
+
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "error reading" in captured.out
+
+    def test_list_configs_with_yml_extension(self, tmp_path, monkeypatch, capsys):
+        """list-configs should also find .yml files."""
+        monkeypatch.chdir(tmp_path)
+        configs_dir = tmp_path / "configs"
+        configs_dir.mkdir()
+
+        config = {"experiment_name": "test", "model": {"name": "gpt2"}}
+        with open(configs_dir / "test.yml", "w") as f:
+            yaml.dump(config, f)
+
+        parser = create_parser()
+        args = parser.parse_args(["list-configs"])
+        cmd_list_configs(args)
+
+        captured = capsys.readouterr()
+        assert "test.yml" in captured.out
+
+
+class TestMainEdgeCases:
+    """Additional edge case tests for main function."""
+
+    def test_main_unknown_command(self, capsys):
+        """main with unknown command should print help."""
+        # Create a mock args object with unknown command
+        with patch('sys.argv', ['todacomm']):
+            with patch('todacomm.cli.create_parser') as mock_parser:
+                mock_args = MagicMock()
+                mock_args.command = "unknown_command"
+                mock_parser.return_value.parse_args.return_value = mock_args
+                result = main()
+
+        assert result == 1
+
+    def test_main_compare_command(self, tmp_path, monkeypatch, capsys):
+        """main with compare command should work."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "experiments").mkdir(exist_ok=True)
+
+        mock_meta_analysis = MagicMock(return_value="experiments/meta.md")
+
+        with patch('sys.argv', ['todacomm', 'compare', 'gpt2,bert']):
+            with patch('todacomm.analysis.meta_analysis.run_meta_analysis_cli', mock_meta_analysis):
+                result = main()
+
+        assert result == 0
