@@ -1,8 +1,8 @@
 """
 Transformer model implementations with layer-wise feature extraction.
 
-Supports GPT-2, BERT, and custom transformer architectures with
-HuggingFace integration and efficient extraction on Apple Silicon (MLX).
+Supports GPT-2, BERT, OPT, Pythia, SmolLM, Qwen2, GPT-Neo and other
+HuggingFace transformer architectures with efficient extraction.
 """
 
 from dataclasses import dataclass, asdict
@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 from transformers import (
     AutoModel,
+    AutoModelForCausalLM,
     AutoTokenizer,
     GPT2LMHeadModel,
     BertForSequenceClassification,
@@ -20,11 +21,17 @@ from transformers import (
 from .base import BaseModel, ModelConfig
 
 
+# Model types that use AutoModelForCausalLM
+CAUSAL_LM_TYPES = {"gpt2", "opt", "pythia", "smollm", "qwen2", "gpt-neo", "llama", "mistral", "gemma"}
+# Model types that use BERT-style loading
+BERT_TYPES = {"bert", "distilbert", "roberta"}
+
+
 @dataclass
 class TransformerConfig(ModelConfig):
     """Configuration for transformer models."""
-    
-    model_type: Literal["gpt2", "bert", "distilbert", "custom"] = "gpt2"
+
+    model_type: str = "gpt2"  # More flexible - any HuggingFace model type
     model_name_or_path: str = "gpt2"  # HuggingFace model name or local path
     num_labels: int = 2  # For classification tasks
     hidden_size: int = 768
@@ -33,18 +40,18 @@ class TransformerConfig(ModelConfig):
     intermediate_size: int = 3072
     max_position_embeddings: int = 1024
     vocab_size: int = 50257
-    
+
     # Task-specific
     task: Literal["lm", "classification", "qa"] = "lm"
-    
+
     # Extraction config
     extract_attention_weights: bool = True
     extract_ffn_outputs: bool = True
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, config_dict: Dict) -> "TransformerConfig":
         """Create from dictionary."""
@@ -54,25 +61,38 @@ class TransformerConfig(ModelConfig):
 class TransformerModel(BaseModel):
     """
     Transformer model wrapper with layer-wise feature extraction.
-    
+
     Supports:
-    - GPT-2 variants (small, medium)
-    - BERT variants (base, distilbert)
-    - Custom transformers
-    
-    Optimized for Apple Silicon (M4 Pro) with efficient batching.
+    - GPT-2, DistilGPT-2
+    - BERT, DistilBERT, RoBERTa
+    - OPT (Meta)
+    - Pythia (EleutherAI)
+    - SmolLM (HuggingFace)
+    - Qwen2 (Alibaba)
+    - GPT-Neo (EleutherAI)
+    - Any HuggingFace causal LM
+
+    Optimized for Apple Silicon (MPS) with efficient batching.
     """
-    
+
     def __init__(self, config: TransformerConfig):
         super().__init__()
         self.config = config
-        
+
         # Load pre-trained model from HuggingFace
         if config.task == "lm":
-            if "gpt2" in config.model_name_or_path.lower():
-                self.model = GPT2LMHeadModel.from_pretrained(config.model_name_or_path)
-            else:
-                self.model = AutoModel.from_pretrained(config.model_name_or_path)
+            # Use AutoModelForCausalLM for most LM models
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    config.model_name_or_path,
+                    trust_remote_code=True  # Needed for some models like Qwen2
+                )
+            except Exception:
+                # Fallback to AutoModel for models without LM head
+                self.model = AutoModel.from_pretrained(
+                    config.model_name_or_path,
+                    trust_remote_code=True
+                )
         elif config.task == "classification":
             self.model = BertForSequenceClassification.from_pretrained(
                 config.model_name_or_path,
@@ -82,54 +102,114 @@ class TransformerModel(BaseModel):
             self.model = BertForQuestionAnswering.from_pretrained(config.model_name_or_path)
         else:
             raise ValueError(f"Unknown task: {config.task}")
-        
+
         # Get base transformer (handles different model structures)
-        if hasattr(self.model, "transformer"):
-            self.transformer = self.model.transformer  # GPT-2
-        elif hasattr(self.model, "bert"):
-            self.transformer = self.model.bert  # BERT
-        elif hasattr(self.model, "distilbert"):
-            self.transformer = self.model.distilbert  # DistilBERT
-        else:
-            self.transformer = self.model
-        
+        self.transformer = self._get_base_transformer()
+
         # Cache for layer names
         self._layer_names = self._build_layer_names()
-        
+
         # Hook storage for intermediate activations
         self._hooks = []
         self._cached_features = {}
+
+    def _get_base_transformer(self):
+        """Extract the base transformer from different model architectures."""
+        model = self.model
+
+        # Try common attribute names for the base transformer
+        for attr in ["transformer", "model", "bert", "distilbert", "roberta",
+                     "gpt_neox", "decoder", "encoder"]:
+            if hasattr(model, attr):
+                base = getattr(model, attr)
+                # Some models have nested structure (e.g., model.model)
+                if hasattr(base, "layers") or hasattr(base, "h") or hasattr(base, "layer"):
+                    return base
+                # Check one level deeper
+                for inner_attr in ["layers", "h", "layer", "decoder"]:
+                    if hasattr(base, inner_attr):
+                        return base
+
+        # Fallback: return the model itself
+        return model
     
     def _build_layer_names(self) -> List[str]:
         """Build list of extractable layer names."""
         layer_names = ["embedding"]
-        
-        # Add transformer layers
-        if hasattr(self.transformer, "h"):  # GPT-2
-            num_layers = len(self.transformer.h)
-            for i in range(num_layers):
-                layer_names.append(f"layer_{i}")
-                if self.config.extract_attention_weights:
-                    layer_names.append(f"layer_{i}_attention")
-                if self.config.extract_ffn_outputs:
-                    layer_names.append(f"layer_{i}_ffn")
-        elif hasattr(self.transformer, "layer"):  # BERT/DistilBERT
-            num_layers = len(self.transformer.layer)
-            for i in range(num_layers):
-                layer_names.append(f"layer_{i}")
-                if self.config.extract_attention_weights:
-                    layer_names.append(f"layer_{i}_attention")
-                if self.config.extract_ffn_outputs:
-                    layer_names.append(f"layer_{i}_ffn")
-        elif hasattr(self.transformer, "encoder"):  # Some BERT variants
-            if hasattr(self.transformer.encoder, "layer"):
-                num_layers = len(self.transformer.encoder.layer)
-                for i in range(num_layers):
-                    layer_names.append(f"layer_{i}")
-        
+
+        # Find the layers attribute - different models use different names
+        num_layers = self._get_num_layers()
+
+        for i in range(num_layers):
+            layer_names.append(f"layer_{i}")
+            if self.config.extract_attention_weights:
+                layer_names.append(f"layer_{i}_attention")
+            if self.config.extract_ffn_outputs:
+                layer_names.append(f"layer_{i}_ffn")
+
         layer_names.append("final")
         return layer_names
-    
+
+    def _get_num_layers(self) -> int:
+        """Get the number of transformer layers."""
+        # Try different attribute names used by various architectures
+        for attr in ["h", "layers", "layer"]:
+            if hasattr(self.transformer, attr):
+                return len(getattr(self.transformer, attr))
+
+        # Check for encoder attribute (some BERT variants)
+        if hasattr(self.transformer, "encoder"):
+            encoder = self.transformer.encoder
+            for attr in ["layer", "layers"]:
+                if hasattr(encoder, attr):
+                    return len(getattr(encoder, attr))
+
+        # Check model config as fallback
+        if hasattr(self.model, "config"):
+            config = self.model.config
+            for attr in ["num_hidden_layers", "n_layer", "num_layers"]:
+                if hasattr(config, attr):
+                    return getattr(config, attr)
+
+        # Default fallback
+        return 12
+
+    def _get_layers_module(self):
+        """Get the module containing transformer layers."""
+        for attr in ["h", "layers", "layer"]:
+            if hasattr(self.transformer, attr):
+                return getattr(self.transformer, attr)
+
+        if hasattr(self.transformer, "encoder"):
+            encoder = self.transformer.encoder
+            for attr in ["layer", "layers"]:
+                if hasattr(encoder, attr):
+                    return getattr(encoder, attr)
+
+        return None
+
+    def _get_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Get embeddings for input_ids across different architectures."""
+        # Try various embedding attribute names
+        # GPT-2 style
+        if hasattr(self.transformer, "wte"):
+            return self.transformer.wte(input_ids)
+        # BERT style
+        if hasattr(self.transformer, "embeddings"):
+            return self.transformer.embeddings(input_ids)
+        # OPT/Pythia/GPT-Neo style (embed_tokens)
+        if hasattr(self.transformer, "embed_tokens"):
+            return self.transformer.embed_tokens(input_ids)
+        # Some models have it nested
+        if hasattr(self.model, "model"):
+            inner = self.model.model
+            if hasattr(inner, "embed_tokens"):
+                return inner.embed_tokens(input_ids)
+        # Fallback: use first hidden state
+        with torch.no_grad():
+            outputs = self.model(input_ids, output_hidden_states=True)
+        return outputs.hidden_states[0]
+
     def forward(
         self, 
         input_ids: torch.Tensor,
@@ -152,7 +232,17 @@ class TransformerModel(BaseModel):
             attention_mask=attention_mask,
             **kwargs
         )
-        return outputs.logits if hasattr(outputs, "logits") else outputs.last_hidden_state
+        # Handle different output types
+        if hasattr(outputs, "logits"):
+            return outputs.logits
+        elif hasattr(outputs, "start_logits"):
+            # QA model returns start_logits and end_logits
+            return outputs.start_logits
+        elif hasattr(outputs, "last_hidden_state"):
+            return outputs.last_hidden_state
+        else:
+            # Return the raw outputs if no standard attribute found
+            return outputs[0]
     
     def extract_layer_features(
         self,
@@ -187,11 +277,8 @@ class TransformerModel(BaseModel):
         
         # Extract based on layer name
         if layer_name == "embedding":
-            # Get embedding layer output
-            if hasattr(self.transformer, "wte"):  # GPT-2
-                return self.transformer.wte(input_ids)
-            elif hasattr(self.transformer, "embeddings"):  # BERT
-                return self.transformer.embeddings(input_ids)
+            # Get embedding layer output - try various architectures
+            return self._get_embeddings(input_ids)
         
         elif layer_name == "final":
             # Final layer output
@@ -265,10 +352,7 @@ class TransformerModel(BaseModel):
         for layer_name in layer_names:
             # Extract features
             if layer_name == "embedding":
-                if hasattr(self.transformer, "wte"):
-                    feats = self.transformer.wte(input_ids)
-                elif hasattr(self.transformer, "embeddings"):
-                    feats = self.transformer.embeddings(input_ids)
+                feats = self._get_embeddings(input_ids)
             elif layer_name == "final":
                 feats = outputs.hidden_states[-1]
             elif layer_name.startswith("layer_") and "_" not in layer_name[6:]:

@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tda-perturbation"
+name = "todacomm"
 version = "0.1.0"
-description = "TDA Perturbation Analysis for Small Language Models"
+description = "ToDACoMM - Topological Data Analysis Comparison of Multiple Models"
 authors = [{name = "Rajesh Sampathkumar", email = "rexplorations@gmail.com"}]
 readme = "README.md"
 requires-python = ">=3.9"
@@ -45,6 +45,12 @@ dev = [
     "jupyter>=1.0.0",
 ]
 
+[project.scripts]
+todacomm = "todacomm.cli:main"
+
 [project.urls]
-Homepage = "https://github.com/your-username/tda_perturbation_analysis"
-Repository = "https://github.com/your-username/tda_perturbation_analysis"
+Homepage = "https://github.com/aiexplorations/todacomm"
+Repository = "https://github.com/aiexplorations/todacomm"
+
+[tool.setuptools.packages.find]
+include = ["todacomm*", "pipeline*"]

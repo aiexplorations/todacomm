@@ -1,0 +1,46 @@
+# GPT-2 Demo Configuration
+# Single model TDA analysis
+
+experiment_name: "gpt2_demo"
+experiment_type: "quick_test"
+description: "GPT-2 TDA analysis demo"
+
+# Model Configuration
+model:
+  type: "gpt2"
+  name: "gpt2"
+  task: "lm"
+
+# Dataset Configuration
+dataset:
+  name: "wikitext2"
+  task: "lm"
+  tokenizer: "gpt2"
+  max_length: 128
+  num_samples: 200
+  batch_size: 8
+
+# Layers to analyze
+analysis_layers: ["embedding", "layer_0", "layer_5", "layer_11", "final"]
+
+# TDA Configuration
+tda:
+  maxdim: 1
+  metric: "euclidean"
+  pca_components: 50
+  sampling_strategy: "uniform"
+  max_points: 500
+
+# Extraction Configuration
+extraction:
+  max_samples: 200
+  pool_strategy: "mean"
+  device: "cpu"
+
+# Output Configuration
+output:
+  generate_report: true
+  save_artifacts: true
+
+device: "cpu"
+random_seed: 42
