@@ -8,6 +8,13 @@ from .interpretation import (
     LayerInsight,
     PatternInsight,
 )
+from .geometry import (
+    GeometryConfig,
+    GeometryResult,
+    characterize_geometry,
+    summarize_geometry,
+    recommend_pca_components,
+)
 
 __all__ = [
     "correlation",
@@ -17,4 +24,10 @@ __all__ = [
     "TDAInterpretation",
     "LayerInsight",
     "PatternInsight",
+    "geometry",
+    "GeometryConfig",
+    "GeometryResult",
+    "characterize_geometry",
+    "summarize_geometry",
+    "recommend_pca_components",
 ]

@@ -10,6 +10,7 @@ seaborn>=0.12.0
 mlx>=0.0.9              # Apple's ML framework for M4 Pro
 mlx-lm>=0.0.8           # MLX language models
 torch>=2.0.0            # PyTorch (CPU/MPS backend)
+torchvision
 transformers>=4.35.0    # HuggingFace models
 datasets>=2.14.0        # HuggingFace datasets
 tokenizers>=0.15.0      # Fast tokenization
