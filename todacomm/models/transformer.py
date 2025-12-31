@@ -85,7 +85,8 @@ class TransformerModel(BaseModel):
             try:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     config.model_name_or_path,
-                    trust_remote_code=True  # Needed for some models like Qwen2
+                    trust_remote_code=True,  # Needed for some models like Qwen2
+                    torch_dtype=torch.float32,  # Convert BFloat16 to Float32 for MPS compatibility
                 )
             except Exception:
                 # Fallback to AutoModel for models without LM head
