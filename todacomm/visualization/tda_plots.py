@@ -1,15 +1,17 @@
 """
-TDA Visualization Functions.
+TDA and Geometry Visualization Functions.
 
 Provides plotting utilities for persistence diagrams, Betti curves,
-and layer-wise TDA metric comparisons.
+layer-wise TDA metric comparisons, and geometry characterization plots.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.gridspec import GridSpec
+import matplotlib.colors as mcolors
 
 
 def plot_persistence_diagram(
@@ -465,4 +467,539 @@ def generate_all_visualizations(
             generated_files.append(diagram_path)
             print(f"  Saved: {diagram_path}")
 
+    return generated_files
+
+
+# =============================================================================
+# Geometry Visualization Functions
+# =============================================================================
+
+def plot_geometry_evolution(
+    geometry_data: List[Dict[str, Any]],
+    model_name: str = "Model",
+    figsize: Tuple[int, int] = (14, 10)
+) -> plt.Figure:
+    """
+    Plot the evolution of geometry metrics across layers.
+
+    Shows intrinsic dimensionality, hubness, and distance statistics
+    to provide intuition for how representations change through the network.
+
+    Args:
+        geometry_data: List of geometry result dicts (one per layer)
+        model_name: Name of the model for title
+        figsize: Figure size
+
+    Returns:
+        Matplotlib figure
+    """
+    fig = plt.figure(figsize=figsize)
+    gs = GridSpec(2, 3, figure=fig, hspace=0.35, wspace=0.3)
+
+    layers = [g['layer'] for g in geometry_data]
+    x = np.arange(len(layers))
+
+    # Extract metrics
+    mle_dims = [g.get('mle_intrinsic_dim', 0) for g in geometry_data]
+    local_pca_dims = [g.get('local_pca_dim', 0) for g in geometry_data]
+    hubness = [g.get('hubness', 0) for g in geometry_data]
+    dist_means = [g.get('dist_mean', 0) for g in geometry_data]
+    dist_stds = [g.get('dist_std', 0) for g in geometry_data]
+    sparsity = [g.get('sparsity', 0) * 100 for g in geometry_data]  # Convert to %
+    n_dims = [g.get('n_dims', 0) for g in geometry_data]
+
+    # Color scheme
+    colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(layers)))
+
+    # 1. Intrinsic Dimensionality
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.bar(x, mle_dims, color='#2E86AB', edgecolor='black', alpha=0.8, label='MLE')
+    ax1.plot(x, local_pca_dims, 'o-', color='#A23B72', linewidth=2, markersize=8,
+             label='Local PCA', markeredgecolor='black')
+    ax1.set_xlabel('Layer', fontsize=11)
+    ax1.set_ylabel('Intrinsic Dimension', fontsize=11)
+    ax1.set_title('Intrinsic Dimensionality\n(Lower = More Compressed)', fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Add trend annotation
+    if len(mle_dims) > 1:
+        dim_change = ((mle_dims[-1] - mle_dims[0]) / mle_dims[0]) * 100 if mle_dims[0] > 0 else 0
+        trend_text = f"{dim_change:+.0f}% change" if dim_change != 0 else "No change"
+        ax1.annotate(trend_text, xy=(0.95, 0.95), xycoords='axes fraction',
+                    fontsize=10, ha='right', va='top',
+                    color='green' if dim_change < 0 else 'red',
+                    fontweight='bold')
+
+    # 2. Hubness Score
+    ax2 = fig.add_subplot(gs[0, 1])
+    bar_colors = ['#E8505B' if h > 1 else '#34BE82' for h in hubness]
+    bars = ax2.bar(x, hubness, color=bar_colors, edgecolor='black', alpha=0.8)
+    ax2.axhline(y=1.0, color='gray', linestyle='--', linewidth=1.5, label='Ideal (=1)')
+    ax2.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+    ax2.set_xlabel('Layer', fontsize=11)
+    ax2.set_ylabel('Hubness (k-occurrence skewness)', fontsize=11)
+    ax2.set_title('Hubness Score\n(>1 = Hub Points Exist)', fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(axis='y', alpha=0.3)
+
+    # 3. Distance Distribution
+    ax3 = fig.add_subplot(gs[0, 2])
+    ax3.errorbar(x, dist_means, yerr=dist_stds, fmt='o-', color='#5C4B99',
+                 linewidth=2, markersize=8, capsize=5, capthick=2,
+                 markeredgecolor='black', label='Mean ± Std')
+    ax3.fill_between(x, np.array(dist_means) - np.array(dist_stds),
+                     np.array(dist_means) + np.array(dist_stds),
+                     alpha=0.2, color='#5C4B99')
+    ax3.set_xlabel('Layer', fontsize=11)
+    ax3.set_ylabel('k-NN Distance', fontsize=11)
+    ax3.set_title('Distance Distribution\n(Spread of Points)', fontweight='bold')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax3.grid(axis='y', alpha=0.3)
+
+    # 4. Dimension vs Intrinsic Dim (compression ratio)
+    ax4 = fig.add_subplot(gs[1, 0])
+    compression = [n / m if m > 0 else 0 for n, m in zip(n_dims, mle_dims)]
+    ax4.bar(x, compression, color='#F18F01', edgecolor='black', alpha=0.8)
+    ax4.set_xlabel('Layer', fontsize=11)
+    ax4.set_ylabel('Compression Ratio (Ambient / Intrinsic)', fontsize=11)
+    ax4.set_title('Compression Ratio\n(Higher = More Redundancy)', fontweight='bold')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax4.grid(axis='y', alpha=0.3)
+
+    # 5. Sparsity (if applicable)
+    ax5 = fig.add_subplot(gs[1, 1])
+    if max(sparsity) > 0:
+        ax5.bar(x, sparsity, color='#44BBA4', edgecolor='black', alpha=0.8)
+        ax5.set_ylabel('Sparsity (%)', fontsize=11)
+        ax5.set_title('Activation Sparsity\n(% Zero Values)', fontweight='bold')
+    else:
+        # If no sparsity, show ambient dimension
+        ax5.bar(x, n_dims, color='#6B4C9A', edgecolor='black', alpha=0.8)
+        ax5.set_ylabel('Dimensions', fontsize=11)
+        ax5.set_title('Ambient Dimensionality', fontweight='bold')
+    ax5.set_xlabel('Layer', fontsize=11)
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax5.grid(axis='y', alpha=0.3)
+
+    # 6. Summary metrics text box
+    ax6 = fig.add_subplot(gs[1, 2])
+    ax6.axis('off')
+
+    # Compute summary statistics
+    initial_dim = mle_dims[0] if mle_dims else 0
+    final_dim = mle_dims[-1] if mle_dims else 0
+    initial_hubness = hubness[0] if hubness else 0
+    final_hubness = hubness[-1] if hubness else 0
+
+    summary_text = f"""
+    Summary: {model_name}
+    ─────────────────────────
+
+    Intrinsic Dimension:
+      • Initial: {initial_dim:.1f}
+      • Final:   {final_dim:.1f}
+      • Change:  {((final_dim - initial_dim) / initial_dim * 100) if initial_dim > 0 else 0:+.1f}%
+
+    Hubness:
+      • Initial: {initial_hubness:.2f}
+      • Final:   {final_hubness:.2f}
+      • Status:  {'✓ Normalized' if final_hubness <= 1.2 else '⚠ High hubness'}
+
+    Interpretation:
+      {'Representations compressed' if final_dim < initial_dim else 'Dim maintained'}
+      {'Uniform k-NN structure' if final_hubness < 1.2 else 'Some hub points remain'}
+    """
+
+    ax6.text(0.1, 0.9, summary_text, transform=ax6.transAxes, fontsize=10,
+             verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow',
+                      edgecolor='gray', alpha=0.9))
+
+    fig.suptitle(f'Geometry Evolution: {model_name}', fontsize=14, fontweight='bold', y=1.02)
+
+    return fig
+
+
+def plot_combined_layer_analysis(
+    geometry_data: List[Dict[str, Any]],
+    tda_summaries: Dict[str, Dict[str, float]],
+    model_name: str = "Model",
+    figsize: Tuple[int, int] = (16, 12)
+) -> plt.Figure:
+    """
+    Create a comprehensive figure combining geometry and TDA metrics.
+
+    This provides full layer-wise intuition for how the neural network
+    transforms data geometry and topology.
+
+    Args:
+        geometry_data: List of geometry result dicts (one per layer)
+        tda_summaries: Dictionary mapping layer names to TDA summary dicts
+        model_name: Name of the model for title
+        figsize: Figure size
+
+    Returns:
+        Matplotlib figure
+    """
+    fig = plt.figure(figsize=figsize)
+    gs = GridSpec(3, 3, figure=fig, hspace=0.4, wspace=0.35)
+
+    layers = [g['layer'] for g in geometry_data]
+    x = np.arange(len(layers))
+
+    # Extract geometry metrics
+    mle_dims = [g.get('mle_intrinsic_dim', 0) for g in geometry_data]
+    hubness = [g.get('hubness', 0) for g in geometry_data]
+
+    # Extract TDA metrics (match layer order)
+    h0_persist = [tda_summaries.get(layer, {}).get('H0_total_persistence', 0) for layer in layers]
+    h1_persist = [tda_summaries.get(layer, {}).get('H1_total_persistence', 0) for layer in layers]
+    h1_counts = [tda_summaries.get(layer, {}).get('H1_count', 0) for layer in layers]
+
+    # Row 1: Key metrics overview
+    # 1a. Intrinsic Dimension
+    ax1 = fig.add_subplot(gs[0, 0])
+    bars = ax1.bar(x, mle_dims, color=plt.cm.Blues(0.6), edgecolor='black', alpha=0.9)
+    ax1.set_ylabel('MLE Intrinsic Dim', fontsize=11)
+    ax1.set_title('Dimensionality\n(representation complexity)', fontweight='bold', fontsize=11)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax1.grid(axis='y', alpha=0.3)
+    # Color gradient based on value
+    norm = plt.Normalize(min(mle_dims), max(mle_dims))
+    for bar, val in zip(bars, mle_dims):
+        bar.set_facecolor(plt.cm.Blues(norm(val)))
+
+    # 1b. Hubness
+    ax2 = fig.add_subplot(gs[0, 1])
+    colors = ['#E8505B' if h > 1.5 else '#FFA500' if h > 1 else '#34BE82' for h in hubness]
+    ax2.bar(x, hubness, color=colors, edgecolor='black', alpha=0.9)
+    ax2.axhline(y=1.0, color='gray', linestyle='--', linewidth=2, alpha=0.7)
+    ax2.set_ylabel('Hubness Score', fontsize=11)
+    ax2.set_title('Hubness\n(k-NN uniformity)', fontweight='bold', fontsize=11)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax2.grid(axis='y', alpha=0.3)
+
+    # 1c. H1 Count (loops)
+    ax3 = fig.add_subplot(gs[0, 2])
+    bars = ax3.bar(x, h1_counts, color=plt.cm.Oranges(0.6), edgecolor='black', alpha=0.9)
+    ax3.set_ylabel('H1 Count (loops)', fontsize=11)
+    ax3.set_title('Topological Loops\n(cyclic structures)', fontweight='bold', fontsize=11)
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax3.grid(axis='y', alpha=0.3)
+    norm = plt.Normalize(min(h1_counts), max(h1_counts))
+    for bar, val in zip(bars, h1_counts):
+        bar.set_facecolor(plt.cm.Oranges(norm(val)))
+
+    # Row 2: Persistence metrics
+    # 2a. H0 Total Persistence
+    ax4 = fig.add_subplot(gs[1, 0])
+    ax4.bar(x, h0_persist, color='#1f77b4', edgecolor='black', alpha=0.8)
+    ax4.set_ylabel('H0 Total Persistence', fontsize=11)
+    ax4.set_title('Component Spread\n(cluster separation)', fontweight='bold', fontsize=11)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax4.grid(axis='y', alpha=0.3)
+    # Mark peak
+    peak_idx = np.argmax(h0_persist)
+    ax4.annotate('Peak', xy=(peak_idx, h0_persist[peak_idx]),
+                xytext=(peak_idx, h0_persist[peak_idx] * 1.1),
+                fontsize=9, ha='center', color='red', fontweight='bold')
+
+    # 2b. H1 Total Persistence
+    ax5 = fig.add_subplot(gs[1, 1])
+    ax5.bar(x, h1_persist, color='#ff7f0e', edgecolor='black', alpha=0.8)
+    ax5.set_ylabel('H1 Total Persistence', fontsize=11)
+    ax5.set_title('Loop Strength\n(cycle persistence)', fontweight='bold', fontsize=11)
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(layers, rotation=45, ha='right', fontsize=9)
+    ax5.grid(axis='y', alpha=0.3)
+    peak_idx = np.argmax(h1_persist)
+    ax5.annotate('Peak', xy=(peak_idx, h1_persist[peak_idx]),
+                xytext=(peak_idx, h1_persist[peak_idx] * 1.1),
+                fontsize=9, ha='center', color='red', fontweight='bold')
+
+    # 2c. Dim vs H1 scatter (relationship)
+    ax6 = fig.add_subplot(gs[1, 2])
+    scatter = ax6.scatter(mle_dims, h1_counts, c=x, cmap='viridis',
+                         s=100, edgecolors='black', linewidths=1)
+    ax6.set_xlabel('Intrinsic Dimension', fontsize=11)
+    ax6.set_ylabel('H1 Count', fontsize=11)
+    ax6.set_title('Dim vs Topology\n(layer progression)', fontweight='bold', fontsize=11)
+    ax6.grid(True, alpha=0.3)
+    # Add layer labels
+    for i, layer in enumerate(layers):
+        ax6.annotate(layer.replace('layer_', 'L'), (mle_dims[i], h1_counts[i]),
+                    fontsize=8, ha='left', va='bottom')
+
+    # Row 3: Evolution plots
+    # 3a-b. Combined evolution
+    ax7 = fig.add_subplot(gs[2, 0:2])
+
+    # Normalize for comparison
+    mle_norm = np.array(mle_dims) / max(mle_dims) if max(mle_dims) > 0 else mle_dims
+    hub_norm = np.array(hubness) / max(hubness) if max(hubness) > 0 else hubness
+    h0_norm = np.array(h0_persist) / max(h0_persist) if max(h0_persist) > 0 else h0_persist
+    h1_norm = np.array(h1_persist) / max(h1_persist) if max(h1_persist) > 0 else h1_persist
+
+    ax7.plot(x, mle_norm, 'o-', linewidth=2.5, markersize=10, label='Intrinsic Dim',
+             color='#2E86AB', markeredgecolor='black')
+    ax7.plot(x, hub_norm, 's-', linewidth=2.5, markersize=10, label='Hubness',
+             color='#E8505B', markeredgecolor='black')
+    ax7.plot(x, h0_norm, '^-', linewidth=2.5, markersize=10, label='H0 Persistence',
+             color='#1f77b4', markeredgecolor='black')
+    ax7.plot(x, h1_norm, 'D-', linewidth=2.5, markersize=10, label='H1 Persistence',
+             color='#ff7f0e', markeredgecolor='black')
+
+    ax7.set_xlabel('Layer', fontsize=12)
+    ax7.set_ylabel('Normalized Value', fontsize=12)
+    ax7.set_title('Layer-wise Evolution (Normalized)', fontweight='bold', fontsize=12)
+    ax7.set_xticks(x)
+    ax7.set_xticklabels(layers, rotation=45, ha='right', fontsize=10)
+    ax7.legend(loc='upper right', fontsize=10, ncol=2)
+    ax7.grid(True, alpha=0.3)
+    ax7.set_ylim(-0.05, 1.15)
+
+    # 3c. Interpretation panel
+    ax8 = fig.add_subplot(gs[2, 2])
+    ax8.axis('off')
+
+    # Generate interpretation
+    dim_trend = "decreasing" if mle_dims[-1] < mle_dims[0] else "stable/increasing"
+    hub_trend = "normalizing" if hubness[-1] < hubness[0] else "increasing"
+    h0_peak = layers[np.argmax(h0_persist)]
+    h1_peak = layers[np.argmax(h1_persist)]
+
+    interpretation = f"""
+    Geometric Interpretation
+    ════════════════════════
+
+    Dimensionality: {dim_trend}
+    • Start: {mle_dims[0]:.1f} → End: {mle_dims[-1]:.1f}
+    • Network {'compresses' if dim_trend == 'decreasing' else 'preserves'} information
+
+    Hubness: {hub_trend}
+    • Start: {hubness[0]:.2f} → End: {hubness[-1]:.2f}
+    • k-NN structure {'becomes uniform' if hub_trend == 'normalizing' else 'has hub points'}
+
+    Topological Complexity:
+    • H0 peaks at {h0_peak} (max cluster spread)
+    • H1 peaks at {h1_peak} (max cyclic structure)
+    • Final H1: {h1_counts[-1]:.0f} loops
+
+    Overall: {'Compression + Simplification' if dim_trend == 'decreasing' and h1_counts[-1] < h1_counts[0] else 'Complex transformations'}
+    """
+
+    ax8.text(0.05, 0.95, interpretation, transform=ax8.transAxes, fontsize=10,
+             verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round,pad=0.5', facecolor='#f0f8ff',
+                      edgecolor='#4682b4', alpha=0.95))
+
+    fig.suptitle(f'Combined Geometry + TDA Analysis: {model_name}',
+                 fontsize=16, fontweight='bold', y=1.01)
+
+    return fig
+
+
+def plot_model_comparison(
+    results: Dict[str, Dict[str, Any]],
+    figsize: Tuple[int, int] = (14, 8)
+) -> plt.Figure:
+    """
+    Compare geometry and TDA metrics across multiple models.
+
+    Args:
+        results: Dictionary mapping model names to result dicts
+                 Each result should have 'geometry' and 'tda' keys
+        figsize: Figure size
+
+    Returns:
+        Matplotlib figure
+    """
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+
+    models = list(results.keys())
+    x = np.arange(len(models))
+    width = 0.6
+
+    # Extract final layer metrics for each model
+    final_dims = []
+    final_hubness = []
+    final_h1_counts = []
+    final_h0_persist = []
+    final_h1_persist = []
+    param_counts = []
+
+    for model_name, result in results.items():
+        # Get final layer geometry
+        geometry = result.get('geometry', [])
+        if geometry:
+            final_geom = geometry[-1]
+            final_dims.append(final_geom.get('mle_intrinsic_dim', 0))
+            final_hubness.append(final_geom.get('hubness', 0))
+        else:
+            final_dims.append(0)
+            final_hubness.append(0)
+
+        # Get final layer TDA
+        tda = result.get('tda', {})
+        final_layer = list(tda.keys())[-1] if tda else None
+        if final_layer:
+            final_h1_counts.append(tda[final_layer].get('H1_count', 0))
+            final_h0_persist.append(tda[final_layer].get('H0_total_persistence', 0))
+            final_h1_persist.append(tda[final_layer].get('H1_total_persistence', 0))
+        else:
+            final_h1_counts.append(0)
+            final_h0_persist.append(0)
+            final_h1_persist.append(0)
+
+        # Get parameter count
+        model_info = result.get('model_info', {})
+        param_counts.append(model_info.get('num_params_millions', 0))
+
+    # Plot 1: Intrinsic Dimension
+    colors = plt.cm.viridis(np.linspace(0.3, 0.8, len(models)))
+    axes[0, 0].bar(x, final_dims, width, color=colors, edgecolor='black')
+    axes[0, 0].set_ylabel('MLE Intrinsic Dim')
+    axes[0, 0].set_title('Final Layer Dimension', fontweight='bold')
+    axes[0, 0].set_xticks(x)
+    axes[0, 0].set_xticklabels(models, rotation=30, ha='right')
+    axes[0, 0].grid(axis='y', alpha=0.3)
+
+    # Plot 2: Hubness
+    hub_colors = ['#34BE82' if h <= 1.2 else '#E8505B' for h in final_hubness]
+    axes[0, 1].bar(x, final_hubness, width, color=hub_colors, edgecolor='black')
+    axes[0, 1].axhline(y=1.0, color='gray', linestyle='--', linewidth=1.5)
+    axes[0, 1].set_ylabel('Hubness')
+    axes[0, 1].set_title('Final Layer Hubness', fontweight='bold')
+    axes[0, 1].set_xticks(x)
+    axes[0, 1].set_xticklabels(models, rotation=30, ha='right')
+    axes[0, 1].grid(axis='y', alpha=0.3)
+
+    # Plot 3: H1 Count
+    axes[0, 2].bar(x, final_h1_counts, width, color='#ff7f0e', edgecolor='black')
+    axes[0, 2].set_ylabel('H1 Count')
+    axes[0, 2].set_title('Final Layer Loops', fontweight='bold')
+    axes[0, 2].set_xticks(x)
+    axes[0, 2].set_xticklabels(models, rotation=30, ha='right')
+    axes[0, 2].grid(axis='y', alpha=0.3)
+
+    # Plot 4: H0 Persistence
+    axes[1, 0].bar(x, final_h0_persist, width, color='#1f77b4', edgecolor='black')
+    axes[1, 0].set_ylabel('H0 Total Persistence')
+    axes[1, 0].set_title('Component Spread', fontweight='bold')
+    axes[1, 0].set_xticks(x)
+    axes[1, 0].set_xticklabels(models, rotation=30, ha='right')
+    axes[1, 0].grid(axis='y', alpha=0.3)
+
+    # Plot 5: H1 Persistence
+    axes[1, 1].bar(x, final_h1_persist, width, color='#ff7f0e', edgecolor='black')
+    axes[1, 1].set_ylabel('H1 Total Persistence')
+    axes[1, 1].set_title('Loop Strength', fontweight='bold')
+    axes[1, 1].set_xticks(x)
+    axes[1, 1].set_xticklabels(models, rotation=30, ha='right')
+    axes[1, 1].grid(axis='y', alpha=0.3)
+
+    # Plot 6: Params vs Dim scatter
+    if any(param_counts):
+        scatter = axes[1, 2].scatter(param_counts, final_dims, c=final_h1_counts,
+                                     s=200, cmap='Oranges', edgecolors='black',
+                                     linewidths=1.5)
+        axes[1, 2].set_xlabel('Parameters (M)')
+        axes[1, 2].set_ylabel('Intrinsic Dim')
+        axes[1, 2].set_title('Size vs Complexity', fontweight='bold')
+        for i, model in enumerate(models):
+            axes[1, 2].annotate(model, (param_counts[i], final_dims[i]),
+                               fontsize=9, ha='left', va='bottom')
+        plt.colorbar(scatter, ax=axes[1, 2], label='H1 Count')
+        axes[1, 2].grid(True, alpha=0.3)
+    else:
+        axes[1, 2].axis('off')
+
+    fig.suptitle('Model Comparison: Geometry & TDA', fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    return fig
+
+
+def generate_ablation_visualizations(
+    results: Dict[str, Any],
+    output_dir: Path,
+) -> List[Path]:
+    """
+    Generate all visualizations for an ablation study.
+
+    Args:
+        results: Full ablation results dictionary
+        output_dir: Directory to save plots
+
+    Returns:
+        List of paths to generated plot files
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    generated_files = []
+    model_results = results.get('results', {})
+
+    print(f"\nGenerating visualizations...")
+
+    # 1. Per-model visualizations
+    for model_name, result in model_results.items():
+        if 'error' in result:
+            continue
+
+        model_dir = output_dir / model_name
+        model_dir.mkdir(exist_ok=True)
+
+        geometry_data = result.get('geometry', [])
+        tda_summaries = result.get('tda', {})
+
+        if geometry_data:
+            # Geometry evolution
+            fig = plot_geometry_evolution(geometry_data, model_name)
+            path = model_dir / "geometry_evolution.png"
+            fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            generated_files.append(path)
+            print(f"  Saved: {path}")
+
+        if tda_summaries:
+            # TDA summary
+            fig = plot_tda_summary(tda_summaries, model_name)
+            path = model_dir / "tda_summary.png"
+            fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            generated_files.append(path)
+            print(f"  Saved: {path}")
+
+        if geometry_data and tda_summaries:
+            # Combined analysis
+            fig = plot_combined_layer_analysis(geometry_data, tda_summaries, model_name)
+            path = model_dir / "combined_analysis.png"
+            fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            generated_files.append(path)
+            print(f"  Saved: {path}")
+
+    # 2. Cross-model comparison (if multiple models)
+    if len(model_results) > 1:
+        fig = plot_model_comparison(model_results)
+        path = output_dir / "model_comparison.png"
+        fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        generated_files.append(path)
+        print(f"  Saved: {path}")
+
+    print(f"\nGenerated {len(generated_files)} visualization files")
     return generated_files
